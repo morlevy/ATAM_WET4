@@ -59,6 +59,7 @@ int check_substring(char* str,int size, char* sub){
 }
 
 int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address) {
+    int ret = 0;
     fseek(file,header->e_shoff,SEEK_SET); // pointer to section header table
     Elf64_Shdr s_header , symtab_header , str_header;
     for(int i = 0 ; i < header->e_shnum ; i++ ){ //search for needed tables
@@ -82,26 +83,34 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
 
     int place = check_substring(str_table,str_header.sh_size,function); // checks for function offset
     if(place == -1){
-        return -1;
-    }
+        ret =  -1;
+    } else {
 
-    for(int i = 0 ; i < sym_quantity ; i ++ ){
-        Elf64_Word offset = symtab_table[i].st_name;
-        if(offset == place){
-            if(symtab_table[i].st_info != 0){ // if its the right symtab entry update the address
-                *address = symtab_table[i].st_value;
-                return 1;
-            } else{
-                return 0;
+        for (int i = 0; i < sym_quantity; i++) {
+            Elf64_Word offset = symtab_table[i].st_name;
+            if (offset == place) {
+                if (symtab_table[i].st_info != 0) { // if its the right symtab entry update the address
+                    *address = symtab_table[i].st_value;
+                    ret = 1;
+                    break;
+                } else {
+                    ret = 0;
+                    break;
+                }
             }
         }
     }
 
-    return 0;
+    free(str_table);
+    return ret;
 }
 
-void debuger(pid_t pid, Elf64_Addr address){
-    //TODO complete
+void debugger(pid_t pid, Elf64_Addr address){
+    int wait_status;
+    wait(&wait_status);
+    while(1){
+
+    }
 }
 
 int main(int argc, char** argv) {
@@ -123,9 +132,10 @@ int main(int argc, char** argv) {
             fclose(file);
             printf("PRF:: %s not found!\n", argv[1]);
         } else if (res == -1) {
+            fclose(file);
             printf("PRF:: %s is not a global symbol!\n", argv[1]);
         } else {
-            debuger(child_pid,address);
+            debugger(child_pid, address);
         }
     }
 
