@@ -22,7 +22,7 @@ pid_t run_target(char* argv[])
             perror("ptrace");
             exit(1);
         }
-        execv(argv[2], argv);
+        execv(argv[2], argv+2);
     } else {
         perror("fork");
         exit(1);
@@ -52,12 +52,15 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     int ret = 0;
     fseek(file,header->e_shoff,SEEK_SET); // pointer to section header table
     Elf64_Shdr s_header , symtab_header , str_header;
+    int strtab_indx = header->e_shstrndx - 1;
+    int flag= 1;
     for(int i = 0 ; i < header->e_shnum ; i++ ){ //search for needed tables
         fread(&s_header , header->e_shentsize , 1 , file);
         if (s_header.sh_type == SHT_SYMTAB){
            symtab_header = s_header;
-        } else if (s_header.sh_type == SHT_STRTAB){
+        } else if (i == strtab_indx){
             str_header = s_header;
+            flag = 0;
         }
     }
 
@@ -66,20 +69,27 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     Elf64_Xword sym_quantity = symtab_header.sh_size / symtab_header.sh_entsize;
     Elf64_Sym symtab_table[sym_quantity]; // array with size of the number of sections
     fread(symtab_table, symtab_header.sh_entsize, sym_quantity, file); // read the symtab sections
-
+/*
+    Elf64_Sym shstrtable_entry = symtab_table[shstrtab_indx];
+    char *shstr_table = malloc(shstrtable_entry.st_size );
+    fseek(file,shstrtable_entry.st_value,SEEK_SET);// go to symtab
+    fread(shstr_table,shstrtable_entry.st_size,1,file);
+    printf("%u\n",shstrtable_entry.st_name);
+    int strtable_offset = check_substring(shstr_table,shstrtable_entry.st_size,".strtab");
+*/
     char *str_table = malloc(str_header.sh_size );
     fseek(file,str_header.sh_offset,SEEK_SET);// go to symtab
     fread(str_table,str_header.sh_size,1,file);
 
     int place = check_substring(str_table,str_header.sh_size,function); // checks for function offset
     if(place == -1){
-        ret =  -1;
+        ret =  0;
     } else {
 
         for (int i = 0; i < sym_quantity; i++) {
             Elf64_Word offset = symtab_table[i].st_name;
             if (offset == place) {
-                if (symtab_table[i].st_info != 0) { // if its the right symtab entry update the address
+                if (symtab_table[i].st_info == 18) { // if its the right symtab entry update the address
                     *address = symtab_table[i].st_value;
                     if(symtab_table[i].st_shndx == 0){
                         find_function_dynamic(header,function,file,address); //TODO complete
@@ -87,7 +97,7 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
                     ret = 1;
                     break;
                 } else {
-                    ret = 0;
+                    ret = -1;
                     break;
                 }
             }
@@ -95,6 +105,7 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     }
 
     free(str_table);
+
     return ret;
 }
 
@@ -108,13 +119,11 @@ void debugger(pid_t pid, Elf64_Addr address,int* counter){
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
         break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
         ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data); //apply breakpoint
-
         ptrace(PTRACE_CONT,pid,NULL,NULL); // continue
         wait(&wait_status);
         if(!WIFSTOPPED(wait_status)){
             return;
         }
-
         ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)data); // fix the instruction
         ptrace(PTRACE_GETREGS , pid,NULL , &regs);
         Elf64_Xword ret_address = ptrace(PTRACE_PEEKTEXT, pid, (void *) regs.rsp, NULL); //get ret address
@@ -162,7 +171,7 @@ int main(int argc, char** argv) {
             printf("PRF:: %s not found!\n", argv[1]);
         } else if (res == -1) {
             fclose(file);
-            printf("PRF:: %s is not a global symbol!\n", argv[1]);
+            printf("PRF:: %s is not a global symbol! :(\n", argv[1]);
         } else {
             debugger(child_pid, address,&counter);
         }
