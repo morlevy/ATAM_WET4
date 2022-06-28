@@ -7,6 +7,7 @@
 #include <sys/user.h>
 #include <unistd.h>
 
+
 #define SHT_SYMTAB 0x2
 #define SHT_STRTAB 0x3
 
@@ -17,7 +18,7 @@ pid_t run_target(char* argv[])
     if (pid > 0) {
         return pid;
     } else if (pid == 0) {
-        if (ptrace(PT_TRACE_ME, 0, NULL, NULL) < 0) {
+        if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
             perror("ptrace");
             exit(1);
         }
@@ -91,6 +92,9 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
             if (offset == place) {
                 if (symtab_table[i].st_info != 0) { // if its the right symtab entry update the address
                     *address = symtab_table[i].st_value;
+                    if(symtab_table[i].st_shndx == 0){
+                        find_function_dynamic(header,function,address); //TODO complete
+                    }
                     ret = 1;
                     break;
                 } else {
@@ -106,9 +110,20 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
 }
 
 void debugger(pid_t pid, Elf64_Addr address){
+    struct user_regs_struct regs;
+    long data;
+    unsigned long break_data;
     int wait_status;
     wait(&wait_status);
     while(1){
+        data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
+        break_data = (data & 0xffffffffffffff00) | 0xcc;
+        ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data);
+
+        ptrace(PTRACE_CONT,pid,NULL,NULL);
+        wait(&wait_status);
+        ptrace(PTRACE_GETREGS , pid,NULL , &regs);
+
 
     }
 }
