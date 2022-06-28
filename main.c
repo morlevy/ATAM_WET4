@@ -46,6 +46,8 @@ int check_substring(char* str,int size, char* sub){
     return -1;
 }
 
+int find_function_dynamic(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address){}
+
 int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address) {
     int ret = 0;
     fseek(file,header->e_shoff,SEEK_SET); // pointer to section header table
