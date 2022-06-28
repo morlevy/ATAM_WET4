@@ -29,19 +29,6 @@ pid_t run_target(char* argv[])
     }
 }
 
-int compare(const char *X, const char *Y)
-{
-    while (*X && *Y)
-    {
-        if (*X != *Y) {
-            return 0;
-        }
-        X++;
-        Y++;
-    }
-    return (*Y == '\0' && *X == '\0');
-}
-
 int check_substring(char* str,int size, char* sub){
     int cur_offset = 0;
     int counter = 0;
@@ -109,7 +96,7 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     return ret;
 }
 
-void debugger(pid_t pid, Elf64_Addr address){
+void debugger(pid_t pid, Elf64_Addr address,int* counter){
     struct user_regs_struct regs;
     long data;
     unsigned long break_data;
@@ -117,19 +104,44 @@ void debugger(pid_t pid, Elf64_Addr address){
     wait(&wait_status);
     while(1){
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
-        break_data = (data & 0xffffffffffffff00) | 0xcc;
-        ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data);
+        break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
+        ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data); //apply breakpoint
 
-        ptrace(PTRACE_CONT,pid,NULL,NULL);
+        ptrace(PTRACE_CONT,pid,NULL,NULL); // continue
         wait(&wait_status);
+        if(!WIFSTOPPED(wait_status)){
+            return;
+        }
+
+        ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)data); // fix the instruction
         ptrace(PTRACE_GETREGS , pid,NULL , &regs);
+        Elf64_Xword ret_address = ptrace(PTRACE_PEEKTEXT, pid, (void *) regs.rsp, NULL); //get ret address
+        Elf64_Xword data_return = ptrace(PTRACE_PEEKTEXT, pid, (void *) ret_address, NULL); //get ret instruction
+        break_data = (data_return & 0xffffffffffffff00) | 0xcc; // breakpoint in return
+        ptrace(PTRACE_POKETEXT, pid, (void *) ret_address, break_data); // apply breakpoint
 
+        regs.rip -= 1;
+        ptrace(PTRACE_SETREGS , pid, NULL , &regs); // fix rip
+        ptrace(PTRACE_CONT,pid,NULL,NULL); //continue
 
+        wait(&wait_status);
+        if(!WIFSTOPPED(wait_status)){
+            return;
+        }
+
+        ptrace(PTRACE_POKETEXT,pid,(void*)ret_address,(void*)data_return); // fix ret instruction
+        ptrace(PTRACE_GETREGS , pid,NULL , &regs);
+        int rax_data = regs.rax; // get return value
+        printf("PRF:: run #%d returned with %d\n", (*counter)++ , rax_data);
+
+        regs.rip -= 1;
+        ptrace(PTRACE_SETREGS , pid, NULL , &regs); // fix rip
     }
 }
 
 int main(int argc, char** argv) {
     pid_t child_pid = run_target(argv);
+    int counter = 1;
     FILE *file = fopen(argv[2],"rb");
     if(!file){
         exit(1);
@@ -150,7 +162,7 @@ int main(int argc, char** argv) {
             fclose(file);
             printf("PRF:: %s is not a global symbol!\n", argv[1]);
         } else {
-            debugger(child_pid, address);
+            debugger(child_pid, address,&counter);
         }
     }
 
