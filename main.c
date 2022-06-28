@@ -82,7 +82,7 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
                 if (symtab_table[i].st_info != 0) { // if its the right symtab entry update the address
                     *address = symtab_table[i].st_value;
                     if(symtab_table[i].st_shndx == 0){
-                        find_function_dynamic(header,function,address); //TODO complete
+                        find_function_dynamic(header,function,file,address); //TODO complete
                     }
                     ret = 1;
                     break;
