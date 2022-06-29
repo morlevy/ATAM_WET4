@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <sys/user.h>
 #include <unistd.h>
+#include <string.h>
 
 
 #define SHT_SYMTAB 0x2
@@ -46,9 +47,45 @@ int check_substring(char* str,int size, char* sub){
     return -1;
 }
 
-int find_function_dynamic(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address){}
+Elf64_Shdr *get_section(Elf64_Ehdr *header, char *section_name) {
+    Elf64_Shdr *section = (Elf64_Shdr *) ((void *) header + header->e_shoff); //pointer to sections
+    Elf64_Shdr *shtrtab = (Elf64_Shdr *) ((void *) header + header->e_shoff +
+                                          ((sizeof(Elf64_Shdr)) * header->e_shstrndx));
+    Elf64_Shdr *section_header_to_return = NULL;
+    for (unsigned long i = 0; i < header->e_shnum; i++) {
+        Elf64_Shdr *current_section = section + i;
+        char *curr_section_name = (char *) ((void *) header + shtrtab->sh_offset + current_section->sh_name);
+        if (strcmp(section_name, curr_section_name) == 0) {
+            section_header_to_return = section + i;
+        }
+    }
+    return section_header_to_return;
+}
 
-int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address) {
+int find_function_dynamic(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address){
+    Elf64_Shdr *rela_plt_section = get_section(header,".rela.plt");
+    Elf64_Shdr *dynsym_section = get_section(header,".dynsym");
+    Elf64_Shdr *dynstr = get_section(header,".dynstr");
+
+    unsigned long num_of_entries = rela_plt_section->sh_size / rela_plt_section->sh_entsize;
+    // find rela
+    Elf64_Rela *curr_rela;
+    Elf64_Sym *curr_sym;
+    for (unsigned long i = 0; i < num_of_entries; i++) {
+        curr_rela = (Elf64_Rela *) ((void *) header + rela_plt_section->sh_offset) + i;
+
+        curr_sym = (Elf64_Sym *) ((void *) header + dynsym_section->sh_offset +
+                                  ELF64_R_SYM(curr_rela->r_info) * sizeof(Elf64_Sym)); ///
+        char *rela_name = (char *) (((void *) header) + dynstr->sh_offset + curr_sym->st_name);
+        if (rela_name && (strcmp(rela_name, function) == 0)) {
+            break;
+        }
+    }
+
+    return curr_rela->r_offset;
+}
+
+int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address , int* is_dynamic) {
     int ret = 0;
     fseek(file,header->e_shoff,SEEK_SET); // pointer to section header table
     Elf64_Shdr s_header , symtab_header , str_header;
@@ -89,10 +126,11 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
         for (int i = 0; i < sym_quantity; i++) {
             Elf64_Word offset = symtab_table[i].st_name;
             if (offset == place) {
-                if (symtab_table[i].st_info == 18) { // if its the right symtab entry update the address
+                if (ELF64_ST_BIND(symtab_table[i].st_info) == 0x1) { // if its the right symtab entry update the address
                     *address = symtab_table[i].st_value;
                     if(symtab_table[i].st_shndx == 0){
-                        find_function_dynamic(header,function,file,address); //TODO complete
+                        *address = find_function_dynamic(header,function,file,address);
+                        *is_dynamic = 1;
                     }
                     ret = 1;
                     break;
@@ -109,12 +147,13 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     return ret;
 }
 
-void debugger(pid_t pid, Elf64_Addr address,int* counter){
+void debugger(pid_t pid, Elf64_Addr address,int* counter , int is_dynamic){
     struct user_regs_struct regs;
     long data;
     unsigned long break_data;
     int wait_status;
     wait(&wait_status);
+
     while(1){
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
         break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
@@ -153,6 +192,7 @@ void debugger(pid_t pid, Elf64_Addr address,int* counter){
 int main(int argc, char** argv) {
     pid_t child_pid = run_target(argv);
     int counter = 1;
+    int is_dynamic = 0;
     FILE *file = fopen(argv[2],"rb");
     if(!file){
         exit(1);
@@ -165,7 +205,7 @@ int main(int argc, char** argv) {
         printf("PRF:: %s not an executable!\n", argv[2]);
     } else {
         Elf64_Addr address;
-        int res = find_function_in_st(&header, argv[1], file , &address);
+        int res = find_function_in_st(&header, argv[1], file , &address , &is_dynamic);
         if (res == 0) {
             fclose(file);
             printf("PRF:: %s not found!\n", argv[1]);
@@ -173,7 +213,7 @@ int main(int argc, char** argv) {
             fclose(file);
             printf("PRF:: %s is not a global symbol! :(\n", argv[1]);
         } else {
-            debugger(child_pid, address,&counter);
+            debugger(child_pid, address,&counter , is_dynamic);
         }
     }
 
