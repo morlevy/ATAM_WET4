@@ -9,8 +9,10 @@
 #include <string.h>
 
 
+
 #define SHT_SYMTAB 0x2
 #define SHT_STRTAB 0x3
+
 
 
 pid_t run_target(char* argv[])
@@ -73,8 +75,7 @@ Elf64_Shdr get_section(FILE* file ,Elf64_Ehdr *header, char *section_name) {
         if (strcmp(section_name, curr_string) == 0) {
             return sections[i];
         }
-        //fseek(file,shtrtab.sh_offset + sections[i].sh_name,SEEK_SET);
-        //printf("header is: %s\n",curr_string);
+      
 
     }
 }
@@ -135,14 +136,7 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     Elf64_Xword sym_quantity = symtab_header.sh_size / symtab_header.sh_entsize;
     Elf64_Sym symtab_table[sym_quantity]; // array with size of the number of sections
     fread(symtab_table, symtab_header.sh_entsize, sym_quantity, file); // read the symtab sections
-/*
-    Elf64_Sym shstrtable_entry = symtab_table[shstrtab_indx];
-    char *shstr_table = malloc(shstrtable_entry.st_size );
-    fseek(file,shstrtable_entry.st_value,SEEK_SET);// go to symtab
-    fread(shstr_table,shstrtable_entry.st_size,1,file);
-    printf("%u\n",shstrtable_entry.st_name);
-    int strtable_offset = check_substring(shstr_table,shstrtable_entry.st_size,".strtab");
-*/
+
     char *str_table = malloc(str_header.sh_size );
     fseek(file,str_header.sh_offset,SEEK_SET);// go to symtab
     fread(str_table,str_header.sh_size,1,file);
@@ -176,30 +170,32 @@ int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_A
     return ret;
 }
 
-void debugger(pid_t pid, Elf64_Addr address,int* counter , int is_dynamic){
+void debugger(pid_t pid, Elf64_Addr address , int is_dynamic){
+    int counter = 1;
     struct user_regs_struct regs;
-    long data;
+    unsigned long data;
     unsigned long break_data;
     int wait_status;
+    Elf64_Addr first_address = address;
     wait(&wait_status);
-
+    
 
 
     while(!WIFEXITED(wait_status)){
-        if(is_dynamic) {
-            address = ptrace(PTRACE_PEEKTEXT, pid, address);
-        }
+       if(is_dynamic) {
+        address = ptrace(PTRACE_PEEKDATA, pid, first_address,NULL);
+    	}
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
         break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
         ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data); //apply breakpoint
         ptrace(PTRACE_CONT,pid,NULL,NULL); // continue
         wait(&wait_status);
-        if(!WIFSTOPPED(wait_status)){
+        if(WIFEXITED(wait_status)){
             return;
         }
         ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)data); // fix the instruction
         ptrace(PTRACE_GETREGS , pid,NULL , &regs);
-        Elf64_Xword ret_address = ptrace(PTRACE_PEEKTEXT, pid, (void *) regs.rsp, NULL); //get ret address
+        Elf64_Xword ret_address = ptrace(PTRACE_PEEKDATA, pid, (void *) regs.rsp, NULL); //get ret address
         Elf64_Xword data_return = ptrace(PTRACE_PEEKTEXT, pid, (void *) ret_address, NULL); //get ret instruction
         break_data = (data_return & 0xffffffffffffff00) | 0xcc; // breakpoint in return
         ptrace(PTRACE_POKETEXT, pid, (void *) ret_address, break_data); // apply breakpoint
@@ -209,19 +205,20 @@ void debugger(pid_t pid, Elf64_Addr address,int* counter , int is_dynamic){
         ptrace(PTRACE_CONT,pid,NULL,NULL); //continue
 
         wait(&wait_status);
-        if(!WIFSTOPPED(wait_status)){
+        if(WIFEXITED(wait_status)){
             return;
         }
 
         ptrace(PTRACE_POKETEXT,pid,(void*)ret_address,(void*)data_return); // fix ret instruction
         ptrace(PTRACE_GETREGS , pid,NULL , &regs);
         int rax_data = regs.rax; // get return value
-        printf("PRF:: run #%d returned with %d\n", (*counter)++ , rax_data);
+        printf("PRF:: run #%d returned with %d\n", (counter)++ , rax_data);
 
         regs.rip -= 1;
         ptrace(PTRACE_SETREGS , pid, NULL , &regs); // fix rip
     }
 }
+
 
 int main(int argc, char** argv) {
     pid_t child_pid = run_target(argv);
@@ -247,7 +244,7 @@ int main(int argc, char** argv) {
             fclose(file);
             printf("PRF:: %s is not a global symbol! :(\n", argv[1]);
         } else {
-            debugger(child_pid, address,&counter , is_dynamic);
+            debugger(child_pid, address , is_dynamic);
         }
     }
 
