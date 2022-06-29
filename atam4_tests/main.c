@@ -47,42 +47,71 @@ int check_substring(char* str,int size, char* sub){
     return -1;
 }
 
-Elf64_Shdr *get_section(Elf64_Ehdr *header, char *section_name) {
-    Elf64_Shdr *section = (Elf64_Shdr *) ((void *) header + header->e_shoff); //pointer to sections
-    Elf64_Shdr *shtrtab = (Elf64_Shdr *) ((void *) header + header->e_shoff +
-                                          ((sizeof(Elf64_Shdr)) * header->e_shstrndx));
-    Elf64_Shdr *section_header_to_return = NULL;
+
+
+Elf64_Shdr get_section(FILE* file ,Elf64_Ehdr *header, char *section_name) {
+    fseek(file,header->e_shoff,SEEK_SET);
+    Elf64_Shdr sections[header->e_shnum];
+    fread(sections , header->e_shentsize , header->e_shnum , file);
+    Elf64_Shdr shtrtab = sections[header->e_shstrndx];
+    char * shstr_string = malloc(shtrtab.sh_size);
+    fseek(file,shtrtab.sh_offset,SEEK_SET);
+    fread(shstr_string , shtrtab.sh_size , 1 , file);
+    int counter = 0;
+    if(*shstr_string == '\0')
+        shstr_string++;
+    char* curr_string = malloc(shtrtab.sh_size);
+    char* first = shstr_string;
     for (unsigned long i = 0; i < header->e_shnum; i++) {
-        Elf64_Shdr *current_section = section + i;
-        char *curr_section_name = (char *) ((void *) header + shtrtab->sh_offset + current_section->sh_name);
-        if (strcmp(section_name, curr_section_name) == 0) {
-            section_header_to_return = section + i;
+        shstr_string = first + sections[i].sh_name;
+        while(*shstr_string != '\0'){
+            curr_string[counter++] = *(shstr_string++);
+            curr_string[counter] = '\0';
         }
+        shstr_string++;
+        counter = 0;
+        if (strcmp(section_name, curr_string) == 0) {
+            return sections[i];
+        }
+        //fseek(file,shtrtab.sh_offset + sections[i].sh_name,SEEK_SET);
+        //printf("header is: %s\n",curr_string);
+
     }
-    return section_header_to_return;
 }
 
 int find_function_dynamic(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address){
-    Elf64_Shdr *rela_plt_section = get_section(header,".rela.plt");
-    Elf64_Shdr *dynsym_section = get_section(header,".dynsym");
-    Elf64_Shdr *dynstr = get_section(header,".dynstr");
+    Elf64_Shdr rela_plt_section = (get_section(file , header,"rela.plt"));
+    Elf64_Shdr dynsym_section = get_section(file,header,"dynsym");
+    Elf64_Shdr dynstr = get_section(file, header,"dynstr");
 
-    unsigned long num_of_entries = rela_plt_section->sh_size / rela_plt_section->sh_entsize;
+    unsigned long num_of_entries = rela_plt_section.sh_size / rela_plt_section.sh_entsize;
+    Elf64_Rela relas[num_of_entries];
+    if(fseek(file,rela_plt_section.sh_offset,SEEK_SET)) {exit(1);}
+    fread((void*)relas,(size_t)rela_plt_section.sh_entsize,num_of_entries,file);
+
+    unsigned long num_of_dynsym = dynsym_section.sh_size / dynsym_section.sh_entsize;
+    Elf64_Sym dynsyms[num_of_dynsym];
+    fseek(file,dynsym_section.sh_offset,SEEK_SET);
+    fread(dynsyms,dynsym_section.sh_entsize , num_of_dynsym,file);
+
+    char* dynstr_string = malloc(dynstr.sh_size);
+    fseek(file,dynstr.sh_offset , SEEK_SET);
+    fread(dynstr_string , dynstr.sh_size , 1 , file);
+
     // find rela
-    Elf64_Rela *curr_rela;
-    Elf64_Sym *curr_sym;
+    Elf64_Rela curr_rela;
+    Elf64_Sym curr_sym;
     for (unsigned long i = 0; i < num_of_entries; i++) {
-        curr_rela = (Elf64_Rela *) ((void *) header + rela_plt_section->sh_offset) + i;
-
-        curr_sym = (Elf64_Sym *) ((void *) header + dynsym_section->sh_offset +
-                                  ELF64_R_SYM(curr_rela->r_info) * sizeof(Elf64_Sym)); ///
-        char *rela_name = (char *) (((void *) header) + dynstr->sh_offset + curr_sym->st_name);
+        curr_rela = relas[i];
+        unsigned long index = ELF64_R_SYM(curr_rela.r_info);
+        curr_sym = dynsyms[index]; ///
+        char *rela_name = dynstr_string + curr_sym.st_name;
         if (rela_name && (strcmp(rela_name, function) == 0)) {
             break;
         }
     }
 
-    return curr_rela->r_offset;
+    return curr_rela.r_offset;
 }
 
 int find_function_in_st(Elf64_Ehdr *header, char *function, FILE *file , Elf64_Addr * address , int* is_dynamic) {
@@ -154,11 +183,12 @@ void debugger(pid_t pid, Elf64_Addr address,int* counter , int is_dynamic){
     int wait_status;
     wait(&wait_status);
 
-    if(is_dynamic) {
-        address = ptrace(PTRACE_PEEKTEXT, pid, address);
-    }
 
-    while(1){
+
+    while(!WIFEXITED(wait_status)){
+        if(is_dynamic) {
+            address = ptrace(PTRACE_PEEKTEXT, pid, address);
+        }
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
         break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
         ptrace(PTRACE_POKETEXT,pid,(void*)address,(void*)break_data); //apply breakpoint
