@@ -154,6 +154,10 @@ void debugger(pid_t pid, Elf64_Addr address,int* counter , int is_dynamic){
     int wait_status;
     wait(&wait_status);
 
+    if(is_dynamic) {
+        address = ptrace(PTRACE_PEEKTEXT, pid, address);
+    }
+
     while(1){
         data = ptrace(PTRACE_PEEKTEXT , pid , (void*) address , NULL);
         break_data = (data & 0xffffffffffffff00) | 0xcc; // breakpoint in function
